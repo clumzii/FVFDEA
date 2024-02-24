@@ -51,7 +51,7 @@ namespace VRCFaceTracking
             _localSettingsService = localSettingsService;
             
             Enabled = false;
-            ContinuousCalibration = true;
+            ContinuousCalibration = false;
             CalibrationWeight = 0.2f;
         }
 
@@ -76,7 +76,7 @@ namespace VRCFaceTracking
         }
 
         private void ApplyCalibrator(ref UnifiedTrackingData inputData)
-            => Calibrate(ref inputData, Enabled ? CalibrationWeight : 0.0f);
+            => Calibrate(ref inputData, CalibrationWeight);
 
         private void ApplySmoothing(ref UnifiedTrackingData input)
         {
@@ -106,14 +106,17 @@ namespace VRCFaceTracking
         /// <returns> Mutated Expression Data. </returns>
         public UnifiedTrackingData MutateData(UnifiedTrackingData input)
         {
-            if (!Enabled && SmoothingMode == false)
+            // enabling mutation should only hinge on exposed setting: Enabled
+            if (!Enabled)
                 return input;
 
             UnifiedTrackingData inputBuffer = new UnifiedTrackingData();
             inputBuffer.CopyPropertiesOf(input);
 
             ApplyCalibrator(ref inputBuffer);
-            ApplySmoothing(ref inputBuffer);
+            // does nothing for now as smoothing mode cannot be changed 
+            if (SmoothingMode)
+                ApplySmoothing(ref inputBuffer);
 
             trackingDataBuffer.CopyPropertiesOf(inputBuffer);
             return inputBuffer;
@@ -127,13 +130,14 @@ namespace VRCFaceTracking
 
                 UnifiedTracking.Mutator.SetCalibration();
 
+                var prev_CalibrationWeight = UnifiedTracking.Mutator.CalibrationWeight;
                 UnifiedTracking.Mutator.CalibrationWeight = 0.75f;
                 UnifiedTracking.Mutator.Enabled = true;
 
                 _logger.LogInformation("Calibrating deep normalization for 30s.");
                 Thread.Sleep(30000);
 
-                UnifiedTracking.Mutator.CalibrationWeight = 0.2f;
+                UnifiedTracking.Mutator.CalibrationWeight = prev_CalibrationWeight;
                 _logger.LogInformation("Fine-tuning normalization. Values will be saved on exit.");
 
             });
@@ -176,22 +180,31 @@ namespace VRCFaceTracking
 
         public async Task SaveCalibration()
         {
-            _logger.LogDebug("Saving configuration...");
+            _logger.LogDebug("Saving calibration configuration...");
             await _localSettingsService.SaveSettingAsync("CalibrationEnabled", Enabled);
             await _localSettingsService.SaveSettingAsync("CalibrationWeight", CalibrationWeight);
             await _localSettingsService.SaveSettingAsync("ContinuousCalibrationEnabled", ContinuousCalibration);
             await _localSettingsService.SaveSettingAsync("Mutations", mutationData, true);
+            await Task.CompletedTask;
+            _logger.LogDebug("Calibration configuration saved");
         }
 
-        public async void LoadCalibration()
+        public async Task LoadCalibration()
         {
             // Try to load config and propogate data into Unified if they exist.
-            _logger.LogDebug("Reading configuration...");
-            Enabled = await _localSettingsService.ReadSettingAsync<bool>("CalibrationEnabled");
-            CalibrationWeight = await _localSettingsService.ReadSettingAsync<float>("CalibrationWeight", 0.2f);
-            ContinuousCalibration = await _localSettingsService.ReadSettingAsync<bool>("ContinuousCalibrationEnabled", true);
-            mutationData = await _localSettingsService.ReadSettingAsync<UnifiedMutationConfig>("Mutation", new());
-            _logger.LogDebug("Configuration loaded.");
+            _logger.LogDebug("Reading calibration configuration...");
+            Enabled = await _localSettingsService.ReadSettingAsync<bool>("CalibrationEnabled", Enabled);
+            CalibrationWeight = await _localSettingsService.ReadSettingAsync<float>("CalibrationWeight", CalibrationWeight);
+            ContinuousCalibration = await _localSettingsService.ReadSettingAsync<bool>("ContinuousCalibrationEnabled", ContinuousCalibration);
+            mutationData = await _localSettingsService.ReadSettingAsync<UnifiedMutationConfig>("Mutations", new());
+            await Task.CompletedTask;
+            _logger.LogDebug("Calibration configuration loaded.");
+
+            // log the loaded calibration for sanity
+            for (var i = 0; i < mutationData.ShapeMutations.Length; i++)
+            {
+                _logger.LogDebug("{0}: {1} | {2}", mutationData.ShapeMutations[i].Name, mutationData.ShapeMutations[i].Floor, mutationData.ShapeMutations[i].Ceil);
+            }
         }
 
         public event PropertyChangedEventHandler PropertyChanged;
